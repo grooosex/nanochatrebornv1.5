@@ -11,6 +11,7 @@ import {
   saveSysText,
   stampSysHashes,
   syncSysTexts,
+  resetSys,
   sysDrifted,
   sysTextEdited,
   togglePair,
@@ -178,7 +179,7 @@ export function SysPromptSheet({ onClose }: { onClose: () => void }) {
 
   const restore = () => {
     if (!edit || edit.readOnly) return;
-    saveSysText(edit.id, edit.baseline, edit.baseline);
+    resetSys([edit.id]);
     setEdit({ ...edit, text: edit.baseline });
     useApp.getState().toast("已还原");
   };
@@ -374,10 +375,10 @@ function Section({ title, ids, children }: { title: string; ids: string[]; child
         <button
           type="button"
           className="grid size-8 place-items-center text-muted"
-          aria-label={`同步${title}`}
+          aria-label={`还原${title}`}
           onClick={() => {
-            syncSysTexts(ids);
-            useApp.getState().toast("已同步到最新");
+            resetSys(ids);
+            useApp.getState().toast("已还原");
           }}
         >
           <RotateCcw className="size-4" />
@@ -414,10 +415,10 @@ function Fold({
           <button
             type="button"
             className="grid size-8 place-items-center text-muted"
-            aria-label={`同步${title}`}
+            aria-label={`还原${title}`}
             onClick={() => {
-              syncSysTexts(resetIds);
-              useApp.getState().toast("已同步到最新");
+              resetSys(resetIds);
+              useApp.getState().toast("已还原");
             }}
           >
             <RotateCcw className="size-4" />

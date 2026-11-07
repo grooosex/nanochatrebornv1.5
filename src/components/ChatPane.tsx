@@ -1194,17 +1194,11 @@ function applyChatImageToPure(chat: Chat, text: string, charTails: Record<string
     if (live.status === "done") next.seed = live.seed;
   }
   const state = useApp.getState();
-  const locked = state.settings.pureCharLocked === true;
-  if (locked) {
-    next.characters = structuredClone(state.pureParams.characters);
-    next.useCoords = state.pureParams.useCoords;
-  } else {
-    next.characters = next.characters.map((c) => ({
-      ...c,
-      name: "",
-      prompt: insert ? joinPromptParts(c.prompt, charTails[c.id] ?? "") : c.prompt,
-    }));
-  }
+  next.characters = next.characters.map((c) => ({
+    ...c,
+    name: "",
+    prompt: insert ? joinPromptParts(c.prompt, charTails[c.id] ?? "") : c.prompt,
+  }));
   state.setPureParams({
     ...next,
     img2imgBlobId: next.img2imgBlobId || "",

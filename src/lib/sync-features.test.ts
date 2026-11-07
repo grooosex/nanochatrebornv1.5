@@ -101,7 +101,7 @@ test("nested ran expands before character slots, self nest stays raw", () => {
   assert.equal(got.usedItemIds.includes("i1"), true);
 });
 
-test("merge keeps a turn the user moved, snap restore reuses a one-round pick once", () => {
+test("merge keeps a turn the user moved, snap restore restarts the cycle", () => {
   const before: RandomBank = {
     ...emptyBank(),
     enabled: true,
@@ -141,13 +141,51 @@ test("merge keeps a turn the user moved, snap restore reuses a one-round pick on
       },
     ],
   });
-  assert.deepEqual(restored.modules[0]?.hold, { itemId: "a", used: 0 });
+  assert.equal(restored.modules[0]?.hold ?? null, null);
+  assert.equal(restored.modules[0]?.nextId ?? null, null);
+  assert.equal(restored.modules[0]?.pick, "random");
   assert.equal(restored.modules[0]?.items.find((item) => item.id === "b")?.enabled, false);
   const seqDone = restoreRandomSnap(before, {
     modules: [{ id: "m", name: "动作", pick: "seq", rounds: 1, itemId: "a", used: 1, enabled: { a: true, b: true } }],
   });
-  assert.equal(seqDone.modules[0]?.hold, null);
-  assert.equal(seqDone.modules[0]?.nextId, "b");
+  assert.equal(seqDone.modules[0]?.hold ?? null, null);
+  assert.equal(seqDone.modules[0]?.nextId, "a");
+  const seqMid = restoreRandomSnap(
+    {
+      ...before,
+      modules: [
+        mod({
+          id: "m",
+          name: "动作",
+          pick: "seq",
+          rounds: 3,
+          nextId: "c",
+          hold: { itemId: "b", used: 2 },
+          items: [
+            { id: "a", name: "a", content: "A", enabled: true },
+            { id: "b", name: "b", content: "B", enabled: false },
+            { id: "c", name: "c", content: "C", enabled: true },
+          ],
+        }),
+      ],
+    },
+    {
+      modules: [
+        {
+          id: "m",
+          name: "动作",
+          pick: "seq",
+          rounds: 3,
+          itemId: "b",
+          used: 2,
+          enabled: { a: true, b: true, c: true },
+        },
+      ],
+    },
+  );
+  assert.equal(seqMid.modules[0]?.hold ?? null, null);
+  assert.equal(seqMid.modules[0]?.nextId, "a");
+  assert.equal(seqMid.modules[0]?.rounds, 3);
 });
 
 test("scheme replace and union skip unknown ids", () => {

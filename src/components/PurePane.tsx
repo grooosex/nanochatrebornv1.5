@@ -1736,28 +1736,32 @@ async function runQueue(showId: (id: string) => void) {
 function waitIdle(signal: AbortSignal) {
   return new Promise<boolean>((resolve) => {
     let timer = 0;
+    let settled = false;
     const cleanup = () => {
       window.clearTimeout(timer);
-      window.removeEventListener("pointerdown", bump, true);
-      window.removeEventListener("keydown", bump, true);
-      window.removeEventListener("input", bump, true);
+      window.removeEventListener("pointerdown", onPointer, true);
+      window.removeEventListener("keydown", onStop, true);
+      window.removeEventListener("input", onStop, true);
       signal.removeEventListener("abort", onAbort);
     };
     const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
       cleanup();
       resolve(ok);
     };
-    const arm = () => {
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => finish(true), 60_000);
+    const onStop = () => finish(false);
+    const onPointer = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest("[data-draw]")) return;
+      finish(false);
     };
-    const bump = () => arm();
     const onAbort = () => finish(false);
-    window.addEventListener("pointerdown", bump, true);
-    window.addEventListener("keydown", bump, true);
-    window.addEventListener("input", bump, true);
+    window.addEventListener("pointerdown", onPointer, true);
+    window.addEventListener("keydown", onStop, true);
+    window.addEventListener("input", onStop, true);
     signal.addEventListener("abort", onAbort);
-    arm();
+    timer = window.setTimeout(() => finish(true), 60_000);
   });
 }
 

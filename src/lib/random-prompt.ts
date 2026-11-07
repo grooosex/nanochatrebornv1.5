@@ -498,7 +498,7 @@ export function captureRandomSnap(before: RandomBank, after: RandomBank, usedIds
   return { modules, ...(combos.length ? { combos } : {}) };
 }
 
-/** 填入、应用参数、插入(中) 只恢复这些模块的抽法。没有的跳过，新加的不动。 */
+/** 填入、应用参数、插入(中)。勾选、轮数、顺序或随机照这张图。顺序从第一个亮着的项第 1 次开始。随机清掉抽中项，下一张重抽并算第 1 次。 */
 export function restoreRandomSnap(bank: RandomBank, snap: RandomSnap | undefined): RandomBank {
   if (!snap?.modules?.length && !snap?.combos?.length) return bank;
   let changed = false;
@@ -511,23 +511,14 @@ export function restoreRandomSnap(bank: RandomBank, snap: RandomSnap | undefined
     const flags = row.enabled ?? {};
     const items = mod.items.map((item) => (item.id in flags ? { ...item, enabled: flags[item.id] === true } : item));
     const pool = items.filter((item) => item.enabled);
-    const held = row.itemId ? pool.find((item) => item.id === row.itemId) : undefined;
-    let nextId = mod.nextId ?? null;
-    let hold = mod.hold ?? null;
-    if (held && row.itemId) {
-      const rounds = row.rounds > 0 ? row.rounds : 1;
-      const used = row.used ?? 1;
-      const follow = pool[(pool.findIndex((item) => item.id === held.id) + 1) % pool.length]?.id ?? held.id;
-      if (row.pick === "random" && rounds <= 1) hold = { itemId: held.id, used: 0 };
-      else if (used >= rounds) {
-        hold = null;
-        if (row.pick === "seq") nextId = follow;
-      } else {
-        hold = { itemId: held.id, used };
-        if (row.pick === "seq") nextId = follow;
-      }
-    }
-    const next: RandomModule = { ...mod, items, pick: row.pick === "seq" ? "seq" : "random", nextId, hold };
+    const seq = row.pick === "seq";
+    const next: RandomModule = {
+      ...mod,
+      items,
+      pick: seq ? "seq" : "random",
+      nextId: seq ? (pool[0]?.id ?? null) : null,
+      hold: null,
+    };
     if ((row.rounds ?? 1) > 1) next.rounds = Math.floor(row.rounds);
     else delete next.rounds;
     return next;
@@ -541,17 +532,8 @@ export function restoreRandomSnap(bank: RandomBank, snap: RandomSnap | undefined
     const present = found.filter((m): m is RandomModule => !!m);
     if (!present.some((m) => m.items.some((item) => item.id === combo.itemId && item.enabled))) continue;
     comboChanged = true;
-    const rounds = combo.rounds > 0 ? combo.rounds : 1;
-    const allSeq = present.every((m) => m.pick === "seq");
-    const used = combo.used ?? 1;
-    if ((allSeq && used >= rounds) || (allSeq && rounds <= 1)) {
-      comboLast[combo.key] = combo.itemId;
-      delete comboHold[combo.key];
-    } else if (rounds <= 1) comboHold[combo.key] = { itemId: combo.itemId, used: 0 };
-    else if (used >= rounds) {
-      comboLast[combo.key] = combo.itemId;
-      delete comboHold[combo.key];
-    } else comboHold[combo.key] = { itemId: combo.itemId, used };
+    delete comboHold[combo.key];
+    delete comboLast[combo.key];
   }
   if (!changed && !comboChanged) return bank;
   return {
