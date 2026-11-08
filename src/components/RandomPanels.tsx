@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent as PE, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, ChevronUp, Pencil, Plus, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Folder, Pencil, Plus, Trash2, X } from "lucide-react";
 import { useApp } from "@/lib/store";
 import {
   APPEARANCE_MODULE_NAME,
@@ -201,7 +201,10 @@ function AddTargetTree({
               onClick={() => setOpen((cur) => ({ ...cur, [g.id]: !cur[g.id] }))}
             >
               <ChevronDown className={cn("size-4 shrink-0 text-muted transition", open[g.id] ? "" : "-rotate-90")} />
-              <span className="min-w-0 truncate font-medium">{g.name || "未命名"}</span>
+              <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-line text-primary" aria-hidden>
+                <Folder className="size-3" />
+              </span>
+              <span className="min-w-0 flex-1 truncate font-medium">{g.name || "未命名"}</span>
             </button>
             {open[g.id] ? walk(g.id, depth + 1) : null}
           </div>

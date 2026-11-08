@@ -13,6 +13,7 @@ import {
   setModulePick,
   setModuleRounds,
   type RandomBank,
+  type RandomGroup,
   type RandomModule,
 } from "@/lib/random-prompt";
 import { autoScrollNearEdge, cn, indexFromY, moveId, nearestScroller, uid } from "@/lib/utils";
@@ -436,22 +437,13 @@ export function ModuleList({
     </div>
   );
 
-  const moveRows = () => {
+  const moveBanned = () => {
     const banned = new Set<string>();
     if (move?.kind === "group") {
       banned.add(move.id);
       for (const id of groupDescendants(bank.groups ?? [], move.id)) banned.add(id);
     }
-    const rows: { id: string; name: string; depth: number }[] = [];
-    const walk = (parent: string | null, depth: number) => {
-      for (const g of orderedGroups(bank, parent)) {
-        if (banned.has(g.id)) continue;
-        rows.push({ id: g.id, name: g.name, depth });
-        walk(g.id, depth + 1);
-      }
-    };
-    walk(null, 0);
-    return rows;
+    return banned;
   };
 
   return (
@@ -568,7 +560,8 @@ export function ModuleList({
       )}
       {move && (
         <MoveDialog
-          rows={moveRows()}
+          groups={bank.groups ?? []}
+          banned={moveBanned()}
           onClose={() => setMove(null)}
           onPick={applyMove}
         />
@@ -649,14 +642,50 @@ function NameDialog({ title, value, onClose, onOk }: { title: string; value: str
 }
 
 function MoveDialog({
-  rows,
+  groups,
+  banned,
   onClose,
   onPick,
 }: {
-  rows: { id: string; name: string; depth: number }[];
+  groups: RandomGroup[];
+  banned: Set<string>;
   onClose: () => void;
   onPick: (parentId: string | null) => void;
 }) {
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const bank: RandomBank = { enabled: true, modules: [], groups };
+  const hasChild = (id: string) => orderedGroups(bank, id).some((g) => !banned.has(g.id));
+  const walk = (parentId: string | null, depth: number): ReactNode =>
+    orderedGroups(bank, parentId)
+      .filter((g) => !banned.has(g.id))
+      .map((g) => {
+        const nested = hasChild(g.id);
+        return (
+          <div key={g.id}>
+            <div className="flex h-11 items-center" style={{ paddingLeft: 4 + depth * 16 }}>
+              {nested ? (
+                <button
+                  type="button"
+                  className="grid size-8 shrink-0 place-items-center text-muted"
+                  aria-label={open[g.id] ? "收起" : "展开"}
+                  onClick={() => setOpen((cur) => ({ ...cur, [g.id]: !cur[g.id] }))}
+                >
+                  <ChevronDown className={cn("size-4 transition", open[g.id] ? "" : "-rotate-90")} />
+                </button>
+              ) : (
+                <span className="size-8 shrink-0" />
+              )}
+              <button type="button" className="flex min-w-0 flex-1 items-center gap-1 text-left text-[14px]" onClick={() => onPick(g.id)}>
+                <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-line text-primary">
+                  <Folder className="size-3" />
+                </span>
+                <span className="min-w-0 truncate font-medium">{g.name || "未命名"}</span>
+              </button>
+            </div>
+            {nested && open[g.id] ? walk(g.id, depth + 1) : null}
+          </div>
+        );
+      });
   return createPortal(
     <div className="fixed inset-0 z-[80] flex items-start justify-center px-4 py-8">
       <button type="button" className="absolute inset-0 bg-overlay/40" onClick={onClose} aria-label="关闭" />
@@ -668,20 +697,10 @@ function MoveDialog({
           </button>
         </div>
         <div className="min-h-0 overflow-y-auto px-4 pb-5">
-          <button type="button" className="mb-2 h-12 w-full rounded-full border border-line bg-card text-[15px]" onClick={() => onPick(null)}>
+          <button type="button" className="flex h-11 w-full items-center text-left text-[14px]" onClick={() => onPick(null)}>
             不放进分组
           </button>
-          {rows.map((row) => (
-            <button
-              key={row.id}
-              type="button"
-              className="mb-2 h-12 w-full rounded-full border border-line bg-card text-left text-[15px]"
-              style={{ paddingLeft: 16 + row.depth * 16 }}
-              onClick={() => onPick(row.id)}
-            >
-              {row.name}
-            </button>
-          ))}
+          {walk(null, 0)}
         </div>
       </div>
     </div>,

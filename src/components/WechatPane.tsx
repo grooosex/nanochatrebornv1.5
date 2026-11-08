@@ -30,6 +30,7 @@ export function WechatDock({ chat }: { chat: Chat }) {
       return (
         <WechatRead
           chat={chat}
+          msgId={msg.id}
           log={msg.wechatLog}
           onClose={() => useApp.getState().setUI({ wechatView: null })}
         />
@@ -479,9 +480,10 @@ function WechatLive({ chat, session }: { chat: Chat; session: WechatSession }) {
   );
 }
 
-function WechatRead({ chat, log, onClose }: { chat: Chat; log: WechatLog; onClose: () => void }) {
+function WechatRead({ chat, msgId, log, onClose }: { chat: Chat; msgId: string; log: WechatLog; onClose: () => void }) {
   const [openInner, setOpenInner] = useState<Record<string, boolean>>({});
   const [full, setFull] = useState(false);
+  const [summing, setSumming] = useState(false);
   const rooms = log.rooms;
   const tabs = rooms ? readRoomTabs(chat, log) : [];
   const [room, setRoom] = useState(() => initialRoom(chat, log));
@@ -492,6 +494,28 @@ function WechatRead({ chat, log, onClose }: { chat: Chat; log: WechatLog; onClos
     : group
       ? "群聊"
       : chat.characters.find((c) => c.id === room)?.name.trim() || log.roomNames?.[room] || "微信";
+  const redoSummary = async () => {
+    if (summing || log.voided) return;
+    const session = logToSession(chat, log);
+    if (!sessionHasLines(session)) {
+      useApp.getState().toast("没有聊天内容");
+      return;
+    }
+    setSumming(true);
+    try {
+      const summary = await summarizeWechat(chat, session);
+      useApp.getState().patchChat(chat.id, (ch) => ({
+        ...ch,
+        messages: ch.messages.map((m) =>
+          m.id === msgId && m.wechatLog ? { ...m, content: wechatTurnText(summary), wechatLog: { ...m.wechatLog, summary } } : m,
+        ),
+      }));
+    } catch (e) {
+      useApp.getState().toast(e instanceof Error ? e.message : "总结失败");
+    } finally {
+      setSumming(false);
+    }
+  };
   return (
     <Shell
       title={title}
@@ -532,7 +556,19 @@ function WechatRead({ chat, log, onClose }: { chat: Chat; log: WechatLog; onClos
       ) : null}
       {log.summary.trim() ? (
         <div className="mt-4 rounded-lg bg-white px-3 py-2 text-[13px] leading-relaxed text-black">
-          <div className="mb-1 text-[12px] text-neutral-400">总结</div>
+          <div className="mb-1 flex items-center">
+            <div className="text-[12px] text-neutral-400">总结</div>
+            {!log.voided ? (
+              <button
+                type="button"
+                className="ml-auto text-[12px] text-neutral-500 disabled:opacity-50"
+                disabled={summing}
+                onClick={() => void redoSummary()}
+              >
+                {summing ? "总结中" : "重置"}
+              </button>
+            ) : null}
+          </div>
           {log.summary}
         </div>
       ) : (
@@ -540,6 +576,22 @@ function WechatRead({ chat, log, onClose }: { chat: Chat; log: WechatLog; onClos
       )}
     </Shell>
   );
+}
+
+function logToSession(chat: Chat, log: WechatLog): WechatSession {
+  const named = log.charName.trim();
+  const char = chat.characters.find((c) => c.name.trim() && c.name.trim() === named);
+  return {
+    charId: char?.id ?? chat.characters[0]?.id ?? "",
+    lines: log.lines ?? [],
+    earlier: "",
+    folded: 0,
+    draft: "",
+    pending: [],
+    armed: false,
+    minimized: false,
+    ...(log.rooms ? { rooms: log.rooms, activeRoom: log.activeRoom } : {}),
+  };
 }
 
 function initialRoom(chat: Chat, log: WechatLog) {

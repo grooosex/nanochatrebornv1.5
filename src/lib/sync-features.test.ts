@@ -8,9 +8,12 @@ import {
   expandParams,
   mergeDrawProgress,
   restoreRandomSnap,
+  refreshSnapEnabled,
+  snapHasRandomItems,
   type RandomBank,
   type RandomModule,
   type RandomScheme,
+  type RandomSnap,
 } from "./random-prompt.ts";
 import { bindSysApp, bindSysBaselines, keepSysVersions, saveSysText, sourceHash, stampSysHashes, sysDrifted } from "./sys-prompt.ts";
 import type { SysPromptPatch } from "./types.ts";
@@ -202,6 +205,61 @@ test("scheme replace and union skip unknown ids", () => {
   const union = applyScheme(items, scheme, "union");
   assert.equal(union[0]?.enabled, true);
   assert.equal(union[1]?.enabled, true);
+});
+
+test("refresh snap enabled keeps rounds and only rewrites ticks on recorded modules", () => {
+  const snap: RandomSnap = {
+    modules: [
+      {
+        id: "m",
+        name: "动作",
+        pick: "seq" as const,
+        rounds: 4,
+        itemId: "a",
+        used: 2,
+        enabled: { a: true, b: false },
+      },
+      {
+        id: "gone",
+        name: "旧模块",
+        pick: "random" as const,
+        rounds: 1,
+        enabled: { z: true },
+      },
+    ],
+  };
+  const bank: RandomBank = {
+    ...emptyBank(),
+    enabled: true,
+    modules: [
+      mod({
+        id: "m",
+        name: "动作",
+        pick: "random",
+        rounds: 1,
+        items: [
+          { id: "a", name: "a", content: "A", enabled: false },
+          { id: "c", name: "c", content: "C", enabled: true },
+        ],
+      }),
+      mod({
+        id: "other",
+        name: "衣服",
+        items: [{ id: "h", name: "h", content: "H", enabled: true }],
+      }),
+    ],
+  };
+  assert.equal(snapHasRandomItems(snap), true);
+  assert.equal(snapHasRandomItems(undefined), false);
+  const next = refreshSnapEnabled(snap, bank);
+  assert.equal(next.modules[0]?.rounds, 4);
+  assert.equal(next.modules[0]?.pick, "seq");
+  assert.equal(next.modules[0]?.itemId, "a");
+  assert.equal(next.modules[0]?.used, 2);
+  assert.deepEqual(next.modules[0]?.enabled, { a: false, c: true });
+  assert.deepEqual(next.modules[1]?.enabled, { z: true });
+  assert.equal(next.modules.length, 2);
+  assert.equal(refreshSnapEnabled(next, bank), next);
 });
 
 test("sys drift stamps old edits and only pops when the source hash moved", () => {

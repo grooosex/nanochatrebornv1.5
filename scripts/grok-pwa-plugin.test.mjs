@@ -508,11 +508,13 @@ test("escapes host-derived values in the install page", () => {
   assert.equal(html.includes("<script>alert(1)</script>"), false);
 });
 
-test("renders the manifest with the per-app name", () => {
+test("renders the manifest with the installed name", () => {
   const manifest = JSON.parse(renderWebManifest("wild-race.grok.me"));
-  assert.equal(manifest.name, "Wild Race");
-  assert.equal(manifest.short_name, "Wild Race");
+  assert.equal(manifest.name, "绘语Re");
+  assert.equal(manifest.short_name, "绘语Re");
   assert.equal(manifest.icons[0].src, "/__grok/icon-180.png");
+  assert.equal(manifest.icons[1].src, "/icon-192.png");
+  assert.equal(manifest.icons[2].src, "/icon-512.png");
 });
 
 // Tripwires: the deployed-app path only works if Nitro scans server/ — an

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent as PE, type ReactNode } from "react";
-import { Bookmark, Check, ChevronLeft, Clock, Download, Eye, Folder, Loader2, MoreHorizontal, Pencil, ScanSearch, SlidersHorizontal, Star, X } from "lucide-react";
+import { Bookmark, Check, ChevronDown, ChevronLeft, Clock, Download, Eye, Folder, Loader2, MoreHorizontal, Pencil, ScanSearch, SlidersHorizontal, Star, X } from "lucide-react";
 import { parseNaiPng } from "@/lib/png-meta";
 import { buildNaiPayload, modelLabel, modelShort, naiDrawAuth, samplerLabel, samplerShort } from "@/lib/nai";
 import { COOLDOWN_MS, NAI_MODELS, NOISE_SCHEDULES, joinPromptParts } from "@/lib/constants";
@@ -8,9 +8,9 @@ import { fakePureChat, useApp, countFavsInGroup, favGroupDescendants } from "@/l
 import { promptPreview } from "@/lib/presets";
 import type { FavoriteItem, FavGroup, HistoryItem, ImageParams } from "@/lib/types";
 import type { RandomSnap } from "@/lib/random-prompt";
-import { restoreRandomSnap } from "@/lib/random-prompt";
+import { refreshSnapEnabled, restoreRandomSnap, snapHasRandomItems } from "@/lib/random-prompt";
 import { afterPaint, generateNai, imageFailText } from "@/lib/engine";
-import { autoScrollNearEdge, downloadBlob, indexFromY, moveId, nearestScroller, randomSeed, sortHistoryNewestFirst, uid } from "@/lib/utils";
+import { autoScrollNearEdge, cn, downloadBlob, indexFromY, moveId, nearestScroller, randomSeed, sortHistoryNewestFirst, uid } from "@/lib/utils";
 import { ParamsPane } from "./ParamsPane";
 import { ImagePick, type StoredPick } from "./ImagePick";
 import { IconBtn, Slider, TextArea, TextInput, useCooldown } from "./ui-kit";
@@ -604,8 +604,9 @@ function FavSheet({
 
   const openMenu = (el: HTMLElement, kind: "fav" | "group", id: string) => {
     const r = el.getBoundingClientRect();
-    const menuW = 132;
-    const menuH = kind === "group" ? 168 : 210;
+    const showRefresh = kind === "fav" && snapHasRandomItems(favorites.find((f) => f.id === id)?.randomSnap);
+    const menuW = showRefresh ? 176 : 132;
+    const menuH = kind === "group" ? 168 : showRefresh ? 252 : 210;
     let right = window.innerWidth - r.right;
     right = Math.max(8, Math.min(right, window.innerWidth - menuW - 8));
     let top = r.bottom + 4;
@@ -613,12 +614,28 @@ function FavSheet({
     setMenu({ kind, id, top, right });
   };
 
+  const refreshFavChecks = (id: string) => {
+    const fav = useApp.getState().favorites.find((f) => f.id === id);
+    const bank = useApp.getState().settings.random;
+    if (!fav?.randomSnap || !snapHasRandomItems(fav.randomSnap) || !bank) {
+      useApp.getState().toast("这张没有随机记录");
+      return;
+    }
+    const next = refreshSnapEnabled(fav.randomSnap, bank);
+    if (next === fav.randomSnap) {
+      useApp.getState().toast("勾选没有变化");
+      return;
+    }
+    useApp.getState().patchFavorite(id, { randomSnap: next });
+    useApp.getState().toast("已按现在的勾选更新");
+  };
+
   const fillFav = (fav: FavoriteItem) => {
     const next = structuredClone(fav.params);
     next.seedLocked = false;
     applyPureParams(next);
     restoreSnap(fav.randomSnap);
-    useApp.getState().toast("已填入");
+    useApp.getState().toast("已应用");
   };
 
   const rowHandlers = {
@@ -715,7 +732,7 @@ function FavSheet({
               onPointerDown={(e) => e.stopPropagation()}
               onClick={() => fillFav(f)}
             >
-              填入
+              应用
             </button>
             <span className="flex-1" />
             <button
@@ -845,8 +862,8 @@ function FavSheet({
       {menu && (
         <div className="fixed inset-0 z-40" onClick={() => setMenu(null)}>
           <div
-            className="absolute w-[132px] overflow-hidden rounded-[14px] border border-line bg-card text-left text-[14px] text-ink shadow-lg"
-            style={{ top: menu.top, right: menu.right }}
+            className="absolute overflow-hidden rounded-[14px] border border-line bg-card text-left text-[14px] text-ink shadow-lg"
+            style={{ top: menu.top, right: menu.right, width: menu.kind === "fav" && snapHasRandomItems(favorites.find((f) => f.id === menu.id)?.randomSnap) ? 176 : 132 }}
             onClick={(e) => e.stopPropagation()}
           >
             {menu.kind === "group" && (
@@ -909,6 +926,18 @@ function FavSheet({
             >
               星标
             </button>
+            {menu.kind === "fav" && snapHasRandomItems(favorites.find((f) => f.id === menu.id)?.randomSnap) ? (
+              <button
+                type="button"
+                className="block w-full border-t border-line px-3 py-2.5 text-left"
+                onClick={() => {
+                  refreshFavChecks(menu.id);
+                  setMenu(null);
+                }}
+              >
+                按现在的勾选更新
+              </button>
+            ) : null}
             <button
               type="button"
               className="block w-full border-t border-line px-3 py-2.5 text-left text-danger"
@@ -985,21 +1014,44 @@ function MoveSheet({
   onClose: () => void;
   onPick: (parentId: string | null) => void;
 }) {
+  const [open, setOpen] = useState<Record<string, boolean>>({});
   const blocked = move.kind === "group" ? new Set([move.id, ...favGroupDescendants(groups, move.id)]) : new Set<string>();
-  const rows: { g: FavGroup; depth: number }[] = [];
-  const walk = (parentId: string | null, depth: number) => {
-    for (const g of [...groups]
-      .filter((x) => (x.parentId ?? null) === parentId)
+  const kidsOf = (parentId: string | null) =>
+    groups
+      .filter((g) => (g.parentId ?? null) === parentId && !blocked.has(g.id))
       .sort((a, b) => {
         if (Boolean(a.starred) !== Boolean(b.starred)) return a.starred ? -1 : 1;
         return a.order - b.order;
-      })) {
-      if (blocked.has(g.id)) continue;
-      rows.push({ g, depth });
-      walk(g.id, depth + 1);
-    }
-  };
-  walk(null, 0);
+      });
+  const walk = (parentId: string | null, depth: number): ReactNode =>
+    kidsOf(parentId).map((g) => {
+      const nested = kidsOf(g.id).length > 0;
+      return (
+        <div key={g.id}>
+          <div className="flex h-11 items-center" style={{ paddingLeft: 4 + depth * 16 }}>
+            {nested ? (
+              <button
+                type="button"
+                className="grid size-8 shrink-0 place-items-center text-muted"
+                aria-label={open[g.id] ? "收起" : "展开"}
+                onClick={() => setOpen((cur) => ({ ...cur, [g.id]: !cur[g.id] }))}
+              >
+                <ChevronDown className={cn("size-4 transition", open[g.id] ? "" : "-rotate-90")} />
+              </button>
+            ) : (
+              <span className="size-8 shrink-0" />
+            )}
+            <button type="button" className="flex min-w-0 flex-1 items-center gap-1 text-left text-[14px]" onClick={() => onPick(g.id)}>
+              <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-line text-primary">
+                <Folder className="size-3" />
+              </span>
+              <span className="min-w-0 truncate font-medium">{g.name || "未命名"}</span>
+            </button>
+          </div>
+          {nested && open[g.id] ? walk(g.id, depth + 1) : null}
+        </div>
+      );
+    });
   return (
     <div className="absolute inset-0 z-30 flex flex-col justify-end bg-overlay/50">
       <button type="button" className="min-h-8 flex-1" onClick={onClose} />
@@ -1011,20 +1063,10 @@ function MoveSheet({
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-          <button type="button" className="mb-2 h-11 w-full rounded-full border border-line bg-card text-[14px]" onClick={() => onPick(null)}>
+          <button type="button" className="flex h-11 w-full items-center text-left text-[14px]" onClick={() => onPick(null)}>
             不放进分组
           </button>
-          {rows.map(({ g, depth }) => (
-            <button
-              key={g.id}
-              type="button"
-              className="mb-2 block h-11 rounded-full border border-line bg-card px-4 text-left text-[14px]"
-              style={{ marginLeft: depth * 16, width: `calc(100% - ${depth * 16}px)` }}
-              onClick={() => onPick(g.id)}
-            >
-              {g.name}
-            </button>
-          ))}
+          {walk(null, 0)}
         </div>
       </div>
     </div>
@@ -1202,11 +1244,11 @@ function FavDetail({
                 next.seedLocked = false;
                 applyPureParams(next);
                 restoreSnap(fav.randomSnap);
-                useApp.getState().toast("已填入");
+                useApp.getState().toast("已应用");
                 onFill();
               }}
             >
-              填入
+              应用
             </button>
             <button
               className="h-11 flex-1 rounded-full bg-danger text-[14px] font-medium text-white"

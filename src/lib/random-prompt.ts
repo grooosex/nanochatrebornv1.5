@@ -543,6 +543,32 @@ export function restoreRandomSnap(bank: RandomBank, snap: RandomSnap | undefined
   };
 }
 
+export function snapHasRandomItems(snap: RandomSnap | undefined) {
+  return (snap?.modules ?? []).some((row) => Object.keys(row.enabled ?? {}).length > 0);
+}
+
+function sameEnabled(a: Record<string, boolean>, b: Record<string, boolean>) {
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((id) => b[id] === a[id]);
+}
+
+/** 用现在模块里的开关改收藏记下的勾选。只动这条里已有的模块。轮数、顺序或随机、抽中项不动。 */
+export function refreshSnapEnabled(snap: RandomSnap, bank: RandomBank): RandomSnap {
+  let changed = false;
+  const modules = snap.modules.map((row) => {
+    const byId = bank.modules.find((mod) => mod.id === row.id);
+    const byName = bank.modules.filter((mod) => mod.name === row.name);
+    const mod = byId ?? (byName.length === 1 ? byName[0] : undefined);
+    if (!mod) return row;
+    const enabled = Object.fromEntries(mod.items.map((item) => [item.id, item.enabled === true]));
+    if (sameEnabled(row.enabled ?? {}, enabled)) return row;
+    changed = true;
+    return { ...row, enabled };
+  });
+  return changed ? { ...snap, modules } : snap;
+}
+
 export function applyScheme(items: RandomItem[], scheme: RandomScheme, mode: "replace" | "union") {
   return items.map((item) => {
     const flag = scheme.enabled[item.id];
