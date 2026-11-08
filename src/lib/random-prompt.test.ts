@@ -9,6 +9,13 @@ import {
   forgetIfPrompt,
   moduleTag,
   jumpSeq,
+  liveRanSpans,
+  withRanSlots,
+  stripRanSlots,
+  cleanCaret,
+  commitRanDrafts,
+  patchSnapFromDrafts,
+  ranDraftOf,
   parseRandomBank,
   reviveAppearanceModule,
   deleteRandomGroup,
@@ -361,6 +368,42 @@ test("seq turn shows the item still in use, and a manual jump starts there next"
   const next = expandParams(params({ promptMid: '<ran_id="角色">' }), { ...used, modules: [jumped] }, () => 0);
   assert.equal(next.params.promptMid, "xiaoling");
   assert.equal(seqTurnItem({ ...mod, items: mod.items.map((item) => ({ ...item, enabled: false })) }), null);
+});
+
+test("live ran marks need every named module", () => {
+  const names = ["角色", "动作"];
+  const one = liveRanSpans('<ran_id="角色">\n<ran_id="没有">', names);
+  assert.equal(one.length, 1);
+  assert.equal(one[0]?.names[0], "角色");
+  assert.equal(liveRanSpans('<ran_id="角色"/>', names).length, 0);
+  assert.equal(liveRanSpans('<ran_id="角色"&"没有">', names).length, 0);
+  const both = liveRanSpans('<ran_id="角色"&"动作">', names);
+  assert.deepEqual(both[0]?.names, ["角色", "动作"]);
+  const slotted = withRanSlots('<ran_id="角色">后', names);
+  assert.equal(slotted, `<ran_id="角色">${"\u2003\u2003"}后`);
+  assert.equal(stripRanSlots(slotted), '<ran_id="角色">后');
+  assert.equal(cleanCaret(slotted, slotted.indexOf("后")), '<ran_id="角色">'.length);
+  assert.equal(withRanSlots('<ran_id="没有">', names), '<ran_id="没有">');
+});
+
+test("saving a ran draft rewrites ticks and clears the unfinished round", () => {
+  const used = expandParams(params({ promptMid: '<ran_id="角色">' }), slowBank(), () => 0).bank!;
+  const draft = ranDraftOf(used.modules[0]);
+  assert.equal(commitRanDrafts(used, [draft]), used);
+  const next = commitRanDrafts(used, [{ ...draft, enabled: { a1: false, a2: true }, nextId: "a2" }]);
+  assert.equal(next.modules[0].items[0].enabled, false);
+  assert.equal(next.modules[0].items[0].content, "xiaoyu");
+  assert.equal(next.modules[0].hold, null);
+  assert.equal(next.modules[0].nextId, "a2");
+  assert.equal(next.modules[0].rounds, 2);
+  const snap = patchSnapFromDrafts(
+    { modules: [{ id: "a", name: "角色", pick: "seq", rounds: 2, itemId: "a1", used: 1, enabled: { a1: true, a2: true } }] },
+    used,
+    [{ ...draft, pick: "random", enabled: { a1: true, a2: false } }],
+  );
+  assert.equal(snap.modules[0]?.pick, "random");
+  assert.equal(snap.modules[0]?.itemId, "a1");
+  assert.deepEqual(snap.modules[0]?.enabled, { a1: true, a2: false });
 });
 
 

@@ -40,6 +40,7 @@ export function LibraryDrawer({
   maxRows,
   emptyText = "还没有保存的项目",
   deleteAsk,
+  hideDelete = false,
 }: {
   items: LibraryItem[];
   onApply: (id: string) => void;
@@ -55,6 +56,7 @@ export function LibraryDrawer({
   maxRows?: number;
   emptyText?: string;
   deleteAsk?: (name: string) => string;
+  hideDelete?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [sortMode, setSortMode] = useState(false);
@@ -257,7 +259,7 @@ export function LibraryDrawer({
   };
 
   const onRowPointerDown = (e: PE<HTMLElement>, id: string) => {
-    if (sortRef.current) return;
+    if (hideDelete || sortRef.current) return;
     moved.current = false;
     if (items.length < 2) return;
     if ((e.target as HTMLElement).closest("[data-row-action]")) return;
@@ -429,24 +431,26 @@ export function LibraryDrawer({
                           应用
                         </button>
                       )}
-                      <button
-                        type="button"
-                        data-row-action
-                        className="grid size-6 shrink-0 place-items-center text-danger"
-                        aria-label={`删除${c.name}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setPendingDelete(c.id);
-                        }}
-                      >
-                        <Trash2 className="size-3.5" />
-                      </button>
+                      {!hideDelete && (
+                        <button
+                          type="button"
+                          data-row-action
+                          className="grid size-6 shrink-0 place-items-center text-danger"
+                          aria-label={`删除${c.name}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPendingDelete(c.id);
+                          }}
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      )}
                     </>
                   )}
                 </div>
               ))}
               {items.length === 0 && <div className="px-2.5 py-2 text-[12px] text-muted">{emptyText}</div>}
-              {items.length > 0 && !sortMode && (onEdit || items.length > 1) ? (
+              {items.length > 0 && !sortMode && !hideDelete && (onEdit || items.length > 1) ? (
                 <p className="px-3 pb-1 pt-0.5 text-[9px] leading-4 text-muted">
                   {onEdit && items.length > 1 ? "双击修改 · 长按排序" : onEdit ? "双击修改" : "长按进入排序"}
                 </p>

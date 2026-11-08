@@ -185,6 +185,47 @@ function flatName(name: string) {
   return name.replace(/[ \t]*[\r\n]+[ \t]*/g, "");
 }
 
+export interface RanSpan {
+  start: number;
+  end: number;
+  names: string[];
+}
+
+/** 语法完整、点到的模块都还在，才算活的块。缺一个名字整块不算。 */
+export function liveRanSpans(text: string, moduleNames: Iterable<string>): RanSpan[] {
+  const have = moduleNames instanceof Set ? moduleNames : new Set(moduleNames);
+  const out: RanSpan[] = [];
+  for (const m of text.matchAll(tagRe())) {
+    const names = namesOf(m[1], m[2] || "").filter(Boolean);
+    if (!names.length || names.some((name) => !have.has(name))) continue;
+    out.push({ start: m.index, end: m.index + m[0].length, names });
+  }
+  return out;
+}
+
+/** 活的语法块后面空出骰子的位置。这不是提示词里的字，保存前会拿掉。 */
+export const RAN_SLOT = "\u2003\u2003";
+
+export function withRanSlots(text: string, moduleNames: Iterable<string>): string {
+  const spans = liveRanSpans(text, moduleNames);
+  if (!spans.length) return text;
+  let out = "";
+  let at = 0;
+  for (const span of spans) {
+    out += text.slice(at, span.end) + RAN_SLOT;
+    at = span.end;
+  }
+  return out + text.slice(at);
+}
+
+export function stripRanSlots(text: string): string {
+  return text.replaceAll("\u2003", "");
+}
+
+export function cleanCaret(shown: string, caret: number): number {
+  return stripRanSlots(shown.slice(0, Math.max(0, caret))).length;
+}
+
 function tagKeys(text: string) {
   const keys = new Set<string>();
   for (const m of text.matchAll(tagRe())) {
@@ -565,6 +606,105 @@ export function refreshSnapEnabled(snap: RandomSnap, bank: RandomBank): RandomSn
     if (sameEnabled(row.enabled ?? {}, enabled)) return row;
     changed = true;
     return { ...row, enabled };
+  });
+  return changed ? { ...snap, modules } : snap;
+}
+
+export interface RanDraft {
+  id: string;
+  name: string;
+  pick: "random" | "seq";
+  rounds: number;
+  nextId: string | null;
+  enabled: Record<string, boolean>;
+}
+
+export function ranDraftOf(mod: RandomModule): RanDraft {
+  return {
+    id: mod.id,
+    name: mod.name,
+    pick: mod.pick === "seq" ? "seq" : "random",
+    rounds: moduleRounds(mod),
+    nextId: mod.nextId ?? null,
+    enabled: Object.fromEntries(mod.items.map((item) => [item.id, item.enabled === true])),
+  };
+}
+
+export function ranDraftDirty(mod: RandomModule, draft: RanDraft): boolean {
+  if ((mod.pick === "seq" ? "seq" : "random") !== (draft.pick === "seq" ? "seq" : "random")) return true;
+  if (moduleRounds(mod) !== Math.max(1, Math.floor(draft.rounds) || 1)) return true;
+  const enabled = Object.fromEntries(mod.items.map((item) => [item.id, item.enabled === true]));
+  if (!sameEnabled(enabled, draft.enabled)) return true;
+  if (draft.pick === "seq" && (mod.nextId ?? null) !== (draft.nextId ?? null)) return true;
+  return false;
+}
+
+function dropComboKeys(modName: string, comboHold: Record<string, { itemId: string; used: number }>, comboLast: Record<string, string>) {
+  let changed = false;
+  for (const key of Object.keys(comboHold)) {
+    if (!key.split("&").includes(modName)) continue;
+    delete comboHold[key];
+    changed = true;
+  }
+  for (const key of Object.keys(comboLast)) {
+    if (!key.split("&").includes(modName)) continue;
+    delete comboLast[key];
+    changed = true;
+  }
+  return changed;
+}
+
+/** 把弹窗草稿写进模块。没改的不动。改了勾选、轮数或顺序/随机，就清掉这一轮还没走完的次数。 */
+export function commitRanDrafts(bank: RandomBank, drafts: RanDraft[]): RandomBank {
+  const byId = new Map(drafts.map((draft) => [draft.id, draft]));
+  const comboHold = { ...(bank.comboHold ?? {}) };
+  const comboLast = { ...(bank.comboLast ?? {}) };
+  let comboChanged = false;
+  const modules = bank.modules.map((mod) => {
+    const draft = byId.get(mod.id);
+    if (!draft || !ranDraftDirty(mod, draft)) return mod;
+    const rounds = Math.max(1, Math.floor(draft.rounds) || 1);
+    const pick = draft.pick === "seq" ? "seq" : "random";
+    const items = mod.items.map((item) => {
+      const flag = draft.enabled[item.id];
+      if (typeof flag !== "boolean" || flag === (item.enabled === true)) return item;
+      return { ...item, enabled: flag };
+    });
+    const pool = items.filter((item) => item.enabled);
+    const next: RandomModule = { ...mod, items, pick, hold: null };
+    if (pick === "seq") next.nextId = draft.nextId && pool.some((item) => item.id === draft.nextId) ? draft.nextId : (pool[0]?.id ?? null);
+    else next.nextId = null;
+    if (rounds > 1) next.rounds = rounds;
+    else delete next.rounds;
+    if (dropComboKeys(mod.name, comboHold, comboLast)) comboChanged = true;
+    return next;
+  });
+  if (!comboChanged && modules.every((mod, i) => mod === bank.modules[i])) return bank;
+  return { ...bank, modules, comboHold, comboLast };
+}
+
+/** 收藏里改过的模块，同步这一条记下的勾选、轮数、顺序或随机。抽中哪一项不动。 */
+export function patchSnapFromDrafts(snap: RandomSnap, bank: RandomBank, drafts: RanDraft[]): RandomSnap {
+  const dirty = drafts.filter((draft) => {
+    const mod = bank.modules.find((row) => row.id === draft.id);
+    return !!mod && ranDraftDirty(mod, draft);
+  });
+  if (!dirty.length || !snap.modules?.length) return snap;
+  let changed = false;
+  const modules = snap.modules.map((row) => {
+    const byId = dirty.find((draft) => draft.id === row.id);
+    const byName = dirty.filter((draft) => bank.modules.find((mod) => mod.id === draft.id)?.name === row.name);
+    const draft = byId ?? (byName.length === 1 ? byName[0] : undefined);
+    if (!draft) return row;
+    changed = true;
+    const rounds = Math.max(1, Math.floor(draft.rounds) || 1);
+    const pick: "random" | "seq" = draft.pick === "seq" ? "seq" : "random";
+    return {
+      ...row,
+      pick,
+      rounds,
+      enabled: { ...draft.enabled },
+    };
   });
   return changed ? { ...snap, modules } : snap;
 }

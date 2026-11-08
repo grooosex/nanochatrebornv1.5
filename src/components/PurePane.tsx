@@ -11,9 +11,9 @@ import type { RandomSnap } from "@/lib/random-prompt";
 import { refreshSnapEnabled, restoreRandomSnap, snapHasRandomItems } from "@/lib/random-prompt";
 import { afterPaint, generateNai, imageFailText } from "@/lib/engine";
 import { autoScrollNearEdge, cn, downloadBlob, indexFromY, moveId, nearestScroller, randomSeed, sortHistoryNewestFirst, uid } from "@/lib/utils";
-import { ParamsPane } from "./ParamsPane";
+import { ParamsPane, PromptBox } from "./ParamsPane";
 import { ImagePick, type StoredPick } from "./ImagePick";
-import { IconBtn, Slider, TextArea, TextInput, useCooldown } from "./ui-kit";
+import { IconBtn, Slider, TextInput, useCooldown } from "./ui-kit";
 
 const HOLD_MS = 450;
 type GenPhase = "uploading" | "generating" | "receiving" | "waiting" | null;
@@ -1154,31 +1154,35 @@ function FavEdit({ fav, onClose }: { fav: FavoriteItem; onClose: () => void }) {
           {p.merged ? (
             <>
               <div className="mb-1 mt-3 text-[12px] text-muted">正面提示词</div>
-              <TextArea value={mid} onChange={(e) => setMid(e.target.value)} />
+              <PromptBox value={mid} minH={88} favId={fav.id} onChange={setMid} />
             </>
           ) : (
             <>
               <div className="mb-1 mt-3 text-[12px] text-muted">正面提示词前</div>
-              <TextArea value={front} onChange={(e) => setFront(e.target.value)} />
+              <PromptBox value={front} minH={88} favId={fav.id} onChange={setFront} />
               <div className="mb-1 mt-3 text-[12px] text-muted">正面提示词中</div>
-              <TextArea value={mid} onChange={(e) => setMid(e.target.value)} />
+              <PromptBox value={mid} minH={88} favId={fav.id} onChange={setMid} />
               <div className="mb-1 mt-3 text-[12px] text-muted">正面提示词后</div>
-              <TextArea value={back} onChange={(e) => setBack(e.target.value)} />
+              <PromptBox value={back} minH={88} favId={fav.id} onChange={setBack} />
             </>
           )}
           <div className="mb-1 mt-3 text-[12px] text-muted">负面提示词</div>
-          <TextArea value={negative} onChange={(e) => setNegative(e.target.value)} />
+          <PromptBox value={negative} minH={88} favId={fav.id} onChange={setNegative} />
           {chars.map((c, i) => (
             <div key={c.id}>
               <div className="mb-1 mt-3 text-[12px] text-muted">角色{i + 1} 正面</div>
-              <TextArea
+              <PromptBox
                 value={c.prompt}
-                onChange={(e) => setChars((rows) => rows.map((x) => (x.id === c.id ? { ...x, prompt: e.target.value } : x)))}
+                minH={88}
+                favId={fav.id}
+                onChange={(v) => setChars((rows) => rows.map((x) => (x.id === c.id ? { ...x, prompt: v } : x)))}
               />
               <div className="mb-1 mt-3 text-[12px] text-muted">角色{i + 1} 负面</div>
-              <TextArea
+              <PromptBox
                 value={c.uc}
-                onChange={(e) => setChars((rows) => rows.map((x) => (x.id === c.id ? { ...x, uc: e.target.value } : x)))}
+                minH={72}
+                favId={fav.id}
+                onChange={(v) => setChars((rows) => rows.map((x) => (x.id === c.id ? { ...x, uc: v } : x)))}
               />
             </div>
           ))}

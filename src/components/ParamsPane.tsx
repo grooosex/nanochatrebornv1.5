@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight, Dices, Download, Folder as FolderIcon, Lock, Plus, Star, Trash2, Upload } from "lucide-react";
 import {
   joinPromptParts,
@@ -25,9 +25,10 @@ import {
 import { llmModelLabel } from "@/lib/llm-models";
 import type { AppearancePreset, Chat, CharacterPrompt, ImageParams, NaiModelId, NoiseSchedule, SamplerId, UcPreset } from "@/lib/types";
 import { cn, randomSeed, uid } from "@/lib/utils";
-import { appendPrompt, appendPromptLine } from "@/lib/random-prompt";
+import { appendPrompt, appendPromptLine, cleanCaret, stripRanSlots, withRanSlots } from "@/lib/random-prompt";
 import { LibraryDrawer } from "./LibraryDrawer";
 import { RandomSettings } from "./RandomPanels";
+import { RanMarks } from "./ran-field";
 import { Card, ChatAvatar, ExpandSelect, Slider, Switch, TextArea, ZoomImg } from "./ui-kit";
 import { ImagePick } from "./ImagePick";
 
@@ -1012,51 +1013,128 @@ function CopyChip({ text }: { text: string }) {
   );
 }
 
-function PromptBox({
+export function PromptBox({
   value,
   onChange,
   suggest,
   minH,
   locked,
+  favId,
 }: {
   value: string;
   onChange: (v: string) => void;
   suggest?: boolean;
   minH?: number;
   locked?: boolean;
+  favId?: string;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const [hits, setHits] = useState<Tag[]>([]);
+  const modules = useApp((s) => s.settings.random?.modules);
+  const names = useMemo(() => (modules ?? []).map((mod) => mod.name), [modules]);
+  const shown = useMemo(() => withRanSlots(value, names), [value, names]);
   useEffect(() => {
     void loadTags();
   }, []);
+  const placeCaret = (clean: string, caret: number) => {
+    requestAnimationFrame(() => {
+      const el = ref.current;
+      if (!el) return;
+      const at = withRanSlots(clean.slice(0, caret), names).length;
+      el.setSelectionRange(at, at);
+    });
+  };
   const onPick = (tag: string) => {
     const el = ref.current;
-    const caret = el?.selectionStart ?? value.length;
+    const caret = cleanCaret(shown, el?.selectionStart ?? shown.length);
     const next = insertTag(value, caret, tag);
     onChange(next.text);
     setHits([]);
     requestAnimationFrame(() => {
-      el?.focus();
-      el?.setSelectionRange(next.caret, next.caret);
+      const box = ref.current;
+      box?.focus();
+      const at = withRanSlots(next.text.slice(0, next.caret), names).length;
+      box?.setSelectionRange(at, at);
     });
   };
   return (
     <div className="relative">
       <TextArea
         ref={ref}
-        value={value}
+        value={shown}
         style={{ minHeight: minH }}
         className={locked ? "border-primary focus:border-primary" : undefined}
+        onKeyDown={(e) => {
+          if (e.nativeEvent.isComposing) return;
+          const el = e.currentTarget;
+          const start = el.selectionStart ?? 0;
+          const end = el.selectionEnd ?? 0;
+          if (start !== end) return;
+          const text = el.value;
+          if (e.key === "ArrowLeft" && text[start - 1] === "\u2003") {
+            e.preventDefault();
+            let i = start - 1;
+            while (i > 0 && text[i - 1] === "\u2003") i -= 1;
+            el.setSelectionRange(text[i - 1] === ">" ? i - 1 : i, text[i - 1] === ">" ? i - 1 : i);
+            return;
+          }
+          if (e.key === "ArrowRight" && text[start] === "\u2003") {
+            e.preventDefault();
+            let i = start;
+            while (text[i] === "\u2003") i += 1;
+            el.setSelectionRange(i, i);
+            return;
+          }
+          if (e.key !== "Backspace") return;
+          const before = text.slice(0, start);
+          const slot = before.match(/>\u2003+$/);
+          if (!slot || slot[0].length < 2) return;
+          e.preventDefault();
+          const cut = start - slot[0].length;
+          const clean = stripRanSlots(text.slice(0, cut) + text.slice(cut + 1));
+          onChange(clean);
+          placeCaret(clean, stripRanSlots(text.slice(0, cut)).length);
+        }}
+        onCopy={(e) => {
+          const el = e.currentTarget;
+          const start = el.selectionStart ?? 0;
+          const end = el.selectionEnd ?? 0;
+          const piece = el.value.slice(start, end);
+          if (!piece.includes("\u2003")) return;
+          e.preventDefault();
+          e.clipboardData.setData("text/plain", stripRanSlots(piece));
+        }}
+        onCut={(e) => {
+          const el = e.currentTarget;
+          const start = el.selectionStart ?? 0;
+          const end = el.selectionEnd ?? 0;
+          const piece = el.value.slice(start, end);
+          if (!piece.includes("\u2003")) return;
+          e.preventDefault();
+          e.clipboardData.setData("text/plain", stripRanSlots(piece));
+          const clean = stripRanSlots(el.value.slice(0, start) + el.value.slice(end));
+          onChange(clean);
+          placeCaret(clean, stripRanSlots(el.value.slice(0, start)).length);
+        }}
         onChange={(e) => {
-          onChange(e.target.value);
+          const nextShown = e.target.value;
+          const caret = e.target.selectionStart ?? nextShown.length;
+          const clean = stripRanSlots(nextShown);
+          onChange(clean);
+          const again = withRanSlots(clean, names);
+          if (again !== nextShown) placeCaret(clean, cleanCaret(nextShown, caret));
           if (!suggest) {
             setHits([]);
             return;
           }
-          const caret = e.target.selectionStart ?? e.target.value.length;
-          setHits(suggestTags(e.target.value, caret, 8).items);
+          setHits(suggestTags(clean, cleanCaret(nextShown, caret), 8).items);
         }}
+      />
+      <RanMarks
+        text={value}
+        box={ref}
+        favId={favId}
+        onInsert={(piece, how) => onChange(how === "line" ? appendPromptLine(value, piece) : appendPrompt(value, piece))}
       />
       {hits.length > 0 && (
         <div className="absolute inset-x-0 top-full z-20 mt-1 max-h-40 overflow-auto rounded-[14px] border border-line bg-card py-1 shadow-lg">
