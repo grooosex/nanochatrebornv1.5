@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDown, ChevronUp, Dice5, Settings, X } from "lucide-react";
 import { useApp } from "@/lib/store";
@@ -12,30 +12,90 @@ import {
   ranDraftOf,
   seqTurnItem,
   moduleRounds,
+  withRanSlots,
+  cleanCaret,
   type RanDraft,
   type RandomModule,
   type RandomScheme,
 } from "@/lib/random-prompt";
 import { LibraryDrawer } from "./LibraryDrawer";
 import { RandomSettings } from "./RandomPanels";
+import { groupAt, isMostlyChinese, promptSegments, replaceWeightBody } from "@/lib/prompt-groups";
+import { tagGloss } from "@/lib/tags";
+import { translateText } from "@/lib/translate";
+
+function caretLine(el: HTMLTextAreaElement, position: number) {
+  const style = getComputedStyle(el);
+  const mirror = document.createElement("div");
+  for (const property of ["fontFamily", "fontSize", "fontWeight", "fontStyle", "lineHeight", "letterSpacing", "padding", "textIndent", "tabSize", "whiteSpace", "overflowWrap", "wordBreak"] as const) {
+    mirror.style[property] = style[property];
+  }
+  Object.assign(mirror.style, {
+    position: "fixed",
+    left: "0",
+    top: "0",
+    visibility: "hidden",
+    pointerEvents: "none",
+    boxSizing: "border-box",
+    width: `${el.clientWidth}px`,
+  });
+  mirror.textContent = el.value.slice(0, position);
+  const marker = document.createElement("span");
+  marker.textContent = el.value.slice(position) || "\u200b";
+  mirror.appendChild(marker);
+  document.body.appendChild(mirror);
+  const caret = marker.getClientRects()[0];
+  const bounds = el.getBoundingClientRect();
+  const lineHeight = parseFloat(style.lineHeight) || 22;
+  mirror.remove();
+  if (!caret) return null;
+  const y = bounds.top + el.clientTop + caret.top - el.scrollTop;
+  const x = bounds.left + el.clientLeft + caret.left - el.scrollLeft;
+  if (y < bounds.top - 1 || y + lineHeight > bounds.bottom + 1) return null;
+  return { x: Math.min(bounds.right - 8, Math.max(bounds.left + 2, x)), y, h: lineHeight };
+}
 
 export function RanMarks({
   text,
   box,
   favId,
   onInsert,
+  onChange,
 }: {
   text: string;
   box: RefObject<HTMLTextAreaElement | null>;
   favId?: string;
   onInsert?: (piece: string, how?: "comma" | "line") => void;
+  onChange?: (next: string) => void;
 }) {
   const modules = useApp((s) => s.settings.random?.modules);
   const names = useMemo(() => (modules ?? []).map((mod) => mod.name), [modules]);
+  const known = useMemo(() => new Set(names), [names]);
+  const glossOn = useApp((s) => s.settings.promptGloss !== false);
+  const netOn = useApp((s) => s.settings.promptNet === true);
   const spans = useMemo(() => liveRanSpans(text, names), [text, names]);
+  const shown = useMemo(() => withRanSlots(text, names), [text, names]);
+  const segs = useMemo(() => promptSegments(shown, (list) => list.length > 0 && list.every((name) => known.has(name))), [shown, known]);
   const view = useRef<HTMLDivElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
   const [hit, setHit] = useState<string[] | null>(null);
   const [settings, setSettings] = useState(false);
+  const [bubble, setBubble] = useState<{
+    index: number;
+    body: string;
+    zh: string;
+    top: number;
+    left: number;
+    anchorX: number;
+    anchorY: number;
+    anchorH: number;
+    maxW: number;
+    replace: boolean;
+  } | null>(null);
+  const bubbleRef = useRef(bubble);
+  bubbleRef.current = bubble;
+  const [netGloss, setNetGloss] = useState<Record<string, string>>({});
+  const netReq = useRef(0);
   useLayoutEffect(() => {
     const el = box.current;
     const mirror = view.current;
@@ -57,55 +117,241 @@ export function RanMarks({
       obs.disconnect();
     };
   }, [box, text, spans.length]);
-  if (!spans.length) return null;
-  const parts: { key: string; text: string; names?: string[] }[] = [];
-  let at = 0;
-  spans.forEach((span, i) => {
-    if (span.start > at) parts.push({ key: `t${at}`, text: text.slice(at, span.start) });
-    parts.push({ key: `s${i}`, text: text.slice(span.start, span.end), names: span.names });
-    at = span.end;
-  });
-  if (at < text.length) parts.push({ key: `t${at}`, text: text.slice(at) });
+  useEffect(() => {
+    if (!netOn) return;
+    const seen = new Set<string>();
+    for (const seg of segs) {
+      if (seg.kind !== "text") continue;
+      const body = seg.body.trim();
+      if (!body || body.length > 500 || seen.has(body) || netGloss[body] !== undefined) continue;
+      seen.add(body);
+      const to = isMostlyChinese(body) ? "en" : !tagGloss(body) && /\p{L}/u.test(body) ? "zh" : null;
+      if (!to) continue;
+      void translateText(body, to)
+        .then((value) => {
+          setNetGloss((cur) => (cur[body] !== undefined ? cur : { ...cur, [body]: value }));
+        })
+        .catch(() => {
+          setNetGloss((cur) => (cur[body] !== undefined ? cur : { ...cur, [body]: "" }));
+        });
+    }
+  }, [netOn, segs, netGloss]);
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    if (!glossOn) {
+      setBubble(null);
+      return;
+    }
+    const place = (toggle: boolean) => {
+      if (document.activeElement !== el) {
+        setBubble(null);
+        return;
+      }
+      const caret = el.selectionStart ?? 0;
+      if ((el.selectionEnd ?? 0) !== caret) {
+        setBubble(null);
+        return;
+      }
+      const found = groupAt(segs, caret);
+      if (!found) {
+        setBubble(null);
+        return;
+      }
+      const body = found.seg.body.trim();
+      const current = bubbleRef.current;
+      if (toggle && current && current.index === found.index && current.body === body) {
+        setBubble(null);
+        return;
+      }
+      const line = caretLine(el, caret);
+      if (!line) {
+        setBubble(null);
+        return;
+      }
+      const chinese = isMostlyChinese(body);
+      const local = chinese ? null : tagGloss(body);
+      const fetched = netGloss[body];
+      const gloss = local || fetched || "";
+      if (!gloss && (!netOn || fetched === "")) {
+        setBubble(null);
+        return;
+      }
+      setBubble({
+        index: found.index,
+        body,
+        zh: gloss || "翻译中",
+        top: line.y,
+        left: line.x,
+        anchorX: line.x,
+        anchorY: line.y,
+        anchorH: line.h,
+        maxW: Math.min(360, window.innerWidth - 24),
+        replace: chinese && !!gloss,
+      });
+      if (gloss || !netOn || body.length > 500 || !/\p{L}/u.test(body)) return;
+      const ticket = ++netReq.current;
+      const to = chinese ? "en" : "zh";
+      void translateText(body, to, true)
+        .then((value) => {
+          if (ticket !== netReq.current) return;
+          setNetGloss((cur) => ({ ...cur, [body]: value }));
+          setBubble((cur) => (cur && cur.body === body ? { ...cur, zh: value, replace: chinese } : cur));
+        })
+        .catch(() => {
+          if (ticket !== netReq.current) return;
+          setNetGloss((cur) => ({ ...cur, [body]: "" }));
+          setBubble((cur) => (cur && cur.body === body ? null : cur));
+        });
+    };
+    const arrows = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"]);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (arrows.has(event.key)) return;
+      setBubble(null);
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (arrows.has(event.key)) place(false);
+    };
+    const onClick = () => place(true);
+    const hide = () => setBubble(null);
+    el.addEventListener("click", onClick);
+    el.addEventListener("keydown", onKeyDown);
+    el.addEventListener("keyup", onKeyUp);
+    el.addEventListener("input", hide);
+    el.addEventListener("scroll", hide);
+    el.addEventListener("blur", hide);
+    return () => {
+      el.removeEventListener("click", onClick);
+      el.removeEventListener("keydown", onKeyDown);
+      el.removeEventListener("keyup", onKeyUp);
+      el.removeEventListener("input", hide);
+      el.removeEventListener("scroll", hide);
+      el.removeEventListener("blur", hide);
+    };
+  }, [box, glossOn, netOn, segs, netGloss]);
+  useLayoutEffect(() => {
+    const node = pop.current;
+    if (!node || !bubble) return;
+    const pad = 12;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const maxW = Math.min(360, Math.max(96, vw - pad * 2));
+    node.style.maxWidth = `${maxW}px`;
+    node.style.left = `${pad}px`;
+    node.style.top = `${pad}px`;
+    node.style.transform = "none";
+    const width = node.offsetWidth;
+    const height = node.offsetHeight;
+    let left = bubble.anchorX;
+    if (left + width > vw - pad) left = vw - pad - width;
+    if (left < pad) left = pad;
+    const gap = 8;
+    let top = bubble.anchorY - height - gap;
+    if (top < pad) top = bubble.anchorY + bubble.anchorH + gap;
+    if (top < pad || top + height > vh - pad) {
+      node.style.visibility = "hidden";
+      return;
+    }
+    node.style.visibility = "";
+    node.style.left = `${left}px`;
+    node.style.top = `${top}px`;
+  }, [bubble]);
+  useEffect(() => {
+    if (!bubble) return;
+    const hide = () => setBubble(null);
+    document.addEventListener("scroll", hide, true);
+    return () => document.removeEventListener("scroll", hide, true);
+  }, [bubble]);
+  if (!spans.length && !glossOn) return null;
+  const swap = (index: number, english: string) => {
+    let at = 0;
+    for (let i = 0; i < segs.length; i += 1) {
+      const seg = segs[i]!;
+      if (i === index && seg.kind === "text") {
+        const start = cleanCaret(shown, at);
+        const end = cleanCaret(shown, at + seg.text.length);
+        onChange?.(text.slice(0, start) + replaceWeightBody(seg.text, english) + text.slice(end));
+        setBubble(null);
+        return;
+      }
+      at += seg.text.length;
+    }
+  };
   return (
     <>
       <div
         ref={view}
         className="pointer-events-none absolute z-10 overflow-hidden whitespace-pre-wrap break-words px-3.5 py-3 text-[14px] leading-relaxed text-transparent"
       >
-        {parts.map((part) =>
-          part.names ? (
-            <span key={part.key}>
-              <span className="underline decoration-primary decoration-dashed decoration-1 underline-offset-[3px]">{part.text}</span>
-              <span className="relative inline-block">
-                {RAN_SLOT}
-                <button
-                  type="button"
-                  className="pointer-events-auto absolute inset-0 flex items-center justify-end pr-0.5 text-primary"
-                  aria-label={`调整${part.names.join("、")}`}
-                  onPointerDown={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    e.currentTarget.dataset.x = String(e.clientX);
-                    e.currentTarget.dataset.y = String(e.clientY);
-                  }}
-                  onPointerUp={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const x = Number(e.currentTarget.dataset.x);
-                    const y = Number(e.currentTarget.dataset.y);
-                    if (Math.abs(e.clientX - x) > 8 || Math.abs(e.clientY - y) > 8) return;
-                    setHit(part.names ?? null);
-                  }}
-                >
-                  <Dice5 className="size-[18px]" />
-                </button>
-              </span>
+        {segs.map((seg, i) =>
+          seg.kind === "ran" ? (
+            <span key={i} className="underline decoration-primary decoration-dashed decoration-1 underline-offset-[3px]">
+              {seg.text}
             </span>
+          ) : seg.kind === "slot" ? (
+            <span key={i} className="relative inline-block">
+              {RAN_SLOT}
+              <button
+                type="button"
+                className="pointer-events-auto absolute inset-0 flex items-center justify-end pr-0.5 text-primary"
+                aria-label={`调整${seg.names.join("、")}`}
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.dataset.x = String(e.clientX);
+                  e.currentTarget.dataset.y = String(e.clientY);
+                }}
+                onPointerUp={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const x = Number(e.currentTarget.dataset.x);
+                  const y = Number(e.currentTarget.dataset.y);
+                  if (Math.abs(e.clientX - x) > 8 || Math.abs(e.clientY - y) > 8) return;
+                  setHit(seg.names);
+                }}
+              >
+                <Dice5 className="size-[18px]" />
+              </button>
+            </span>
+          ) : seg.kind === "gap" ? (
+            <span key={i}>{seg.text}</span>
           ) : (
-            <span key={part.key}>{part.text}</span>
+            <span key={i} data-gi={i}>
+              {seg.text}
+            </span>
           ),
         )}
       </div>
+      {bubble && bubble.zh
+        ? createPortal(
+            <div
+              ref={pop}
+              className="fixed z-[90] w-max rounded-[12px] border border-line bg-card px-2.5 py-1.5 text-left text-[12px] leading-4 shadow-lg"
+              style={{
+                top: Math.max(12, bubble.anchorY - 8),
+                left: bubble.anchorX,
+                maxWidth: bubble.maxW,
+                transform: "translateY(-100%)",
+              }}
+            >
+              <button
+                type="button"
+                className={`block max-w-full text-left ${bubble.replace ? "pointer-events-auto" : "pointer-events-none"}`}
+                onPointerDown={(e) => {
+                  if (!bubble.replace) return;
+                  e.preventDefault();
+                }}
+                onClick={() => {
+                  if (bubble.replace && bubble.zh && bubble.zh !== "翻译中") swap(bubble.index, bubble.zh);
+                }}
+              >
+                <div className="break-words text-ink">{bubble.body}</div>
+                <div className="break-words text-muted">{bubble.zh}</div>
+              </button>
+            </div>,
+            document.body,
+          )
+        : null}
       {hit ? (
         <RanDiceDialog names={hit} favId={favId} onClose={() => setHit(null)} onOpenSettings={() => setSettings(true)} />
       ) : null}
@@ -113,6 +359,9 @@ export function RanMarks({
     </>
   );
 }
+
+const NO_IDS: string[] = [];
+const NO_MODULES: RandomModule[] = [];
 
 function RanDiceDialog({
   names,
@@ -125,12 +374,12 @@ function RanDiceDialog({
   onClose: () => void;
   onOpenSettings: () => void;
 }) {
-  const modules = useApp((s) => s.settings.random?.modules ?? []);
+  const modules = useApp((s) => s.settings.random?.modules) ?? NO_MODULES;
   const [drafts, setDrafts] = useState<RanDraft[]>(() => draftsFor(names, modules));
   const [tab, setTab] = useState(0);
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<Record<string, string | null>>({});
-  const shownIds = useApp((s) => (s.settings.random?.enabled ? (s.settings.random.shownItemIds ?? []) : []));
+  const shownIds = useApp((s) => (s.settings.random?.enabled ? s.settings.random.shownItemIds : undefined)) ?? NO_IDS;
   const draft = drafts[tab] ?? drafts[0];
   const mod = draft ? modules.find((row) => row.id === draft.id) : undefined;
   const dirty = drafts.some((row) => {

@@ -83,6 +83,27 @@ export type Tag = { e: string; c: string; n: number };
 let tags: Tag[] = [];
 let loaded = false;
 let loading: Promise<void> | null = null;
+let glossMap: Map<string, string> | null = null;
+
+function glossKey(raw: string) {
+  return raw.toLowerCase().replaceAll("_", " ").replace(/\s+/g, " ").trim();
+}
+
+function rebuildGloss() {
+  glossMap = new Map();
+  for (const tag of tags) {
+    const zh = tag.c.trim();
+    if (!zh || zh.toLowerCase() === tag.e.toLowerCase()) continue;
+    glossMap.set(glossKey(tag.e), zh);
+  }
+}
+
+export function tagGloss(body: string) {
+  if (!glossMap) rebuildGloss();
+  const key = glossKey(body);
+  if (!key) return null;
+  return glossMap?.get(key) ?? null;
+}
 
 export function loadTags() {
   if (loaded) return Promise.resolve();
@@ -91,10 +112,12 @@ export function loadTags() {
     .then((r) => r.json())
     .then((rows: Tag[]) => {
       tags = rows.map((t) => ({ ...t, c: ZH_FIX[t.e] || t.c }));
+      rebuildGloss();
       loaded = true;
     })
     .catch(() => {
       tags = Object.entries(ZH_FIX).map(([e, c], i) => ({ e, c, n: 1_000_000 - i }));
+      rebuildGloss();
       loaded = true;
     });
   return loading;
@@ -114,7 +137,6 @@ export function suggestTags(text: string, caret: number, limit = 40) {
     const en = t.e.toLowerCase();
     const zh = t.c;
     if (en.startsWith(q) || en.includes(q) || zh.includes(q)) hits.push(t);
-    if (hits.length >= 400) break;
   }
   hits.sort((a, b) => {
     const as = a.e.toLowerCase().startsWith(q) ? 1 : 0;

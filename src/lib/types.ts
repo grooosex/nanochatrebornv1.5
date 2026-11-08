@@ -491,6 +491,18 @@ export interface Settings {
   multiDrawFast?: boolean;
   /** 生图提示词里的随机模块。关着时符号当普通字。 */
   random?: RandomBank;
+  /** 生图提示词的分组虚线和权重颜色。关着只留字。 */
+  promptPreview?: boolean;
+  /** 旧开关。没有 promptPreview 时，两个都开才算显示预览。 */
+  promptGroup?: boolean;
+  /** 旧开关。没有 promptPreview 时，两个都开才算显示预览。 */
+  promptColor?: boolean;
+  /** 点一个词，看词库里的中文。 */
+  promptGloss?: boolean;
+  /** 有译文的那一组再画虚线。点词译文关着时点不了。 */
+  promptGlossLine?: boolean;
+  /** 词库没有的词，点到时问翻译接口。 */
+  promptNet?: boolean;
   /** 聊天正文的字和整张纸的颜色。不进模型。 */
   look?: LookSettings;
   lookThemes?: LookTheme[];

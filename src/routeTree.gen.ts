@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiGrokRouteImport } from './routes/api/grok'
 import { Route as ApiLlmRouteImport } from './routes/api/llm'
 import { Route as ApiNaiRouteImport } from './routes/api/nai'
+import { Route as ApiTranslateRouteImport } from './routes/api/translate'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -34,18 +35,25 @@ const ApiNaiRoute = ApiNaiRouteImport.update({
   path: '/api/nai',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiTranslateRoute = ApiTranslateRouteImport.update({
+  id: '/api/translate',
+  path: '/api/translate',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/api/grok': typeof ApiGrokRoute
   '/api/llm': typeof ApiLlmRoute
   '/api/nai': typeof ApiNaiRoute
+  '/api/translate': typeof ApiTranslateRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/api/grok': typeof ApiGrokRoute
   '/api/llm': typeof ApiLlmRoute
   '/api/nai': typeof ApiNaiRoute
+  '/api/translate': typeof ApiTranslateRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -53,13 +61,15 @@ export interface FileRoutesById {
   '/api/grok': typeof ApiGrokRoute
   '/api/llm': typeof ApiLlmRoute
   '/api/nai': typeof ApiNaiRoute
+  '/api/translate': typeof ApiTranslateRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/grok' | '/api/llm' | '/api/nai'
+  fullPaths: '/' | '/api/grok' | '/api/llm' | '/api/nai' | '/api/translate'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/grok' | '/api/llm' | '/api/nai'
-  id: '__root__' | '/' | '/api/grok' | '/api/llm' | '/api/nai'
+  to: '/' | '/api/grok' | '/api/llm' | '/api/nai' | '/api/translate'
+  id:
+    '__root__' | '/' | '/api/grok' | '/api/llm' | '/api/nai' | '/api/translate'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -67,6 +77,7 @@ export interface RootRouteChildren {
   ApiGrokRoute: typeof ApiGrokRoute
   ApiLlmRoute: typeof ApiLlmRoute
   ApiNaiRoute: typeof ApiNaiRoute
+  ApiTranslateRoute: typeof ApiTranslateRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -99,6 +110,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiNaiRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/translate': {
+      id: '/api/translate'
+      path: '/api/translate'
+      fullPath: '/api/translate'
+      preLoaderRoute: typeof ApiTranslateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -107,6 +125,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiGrokRoute: ApiGrokRoute,
   ApiLlmRoute: ApiLlmRoute,
   ApiNaiRoute: ApiNaiRoute,
+  ApiTranslateRoute: ApiTranslateRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

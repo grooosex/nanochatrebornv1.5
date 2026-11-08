@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronLeft, ChevronRight, Dices, Download, Folder as FolderIcon, Lock, Plus, Star, Trash2, Upload } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, Dices, Download, Folder as FolderIcon, Lock, Plus, Settings, Star, Trash2, Upload } from "lucide-react";
 import {
   joinPromptParts,
   NAI_MODELS,
@@ -25,7 +25,10 @@ import {
 import { llmModelLabel } from "@/lib/llm-models";
 import type { AppearancePreset, Chat, CharacterPrompt, ImageParams, NaiModelId, NoiseSchedule, SamplerId, UcPreset } from "@/lib/types";
 import { cn, randomSeed, uid } from "@/lib/utils";
+import { grokOnce } from "@/lib/grok-client";
 import { appendPrompt, appendPromptLine, cleanCaret, stripRanSlots, withRanSlots } from "@/lib/random-prompt";
+import { translateText } from "@/lib/translate";
+import { isMostlyChinese } from "@/lib/prompt-groups";
 import { LibraryDrawer } from "./LibraryDrawer";
 import { RandomSettings } from "./RandomPanels";
 import { RanMarks } from "./ran-field";
@@ -124,7 +127,13 @@ export function ParamsPane({ chat, mode = "chat" }: { chat: Chat; mode?: "chat" 
   };
 
   const resId = `${p.width}x${p.height}`;
-  const [polarity, setPolarity] = useState<"pos" | "neg">("pos");
+  const [polarity, setPolarity] = useState<"pos" | "neg" | "tr">("pos");
+  const [gear, setGear] = useState(false);
+  const [trSrc, setTrSrc] = useState("");
+  const [trOut, setTrOut] = useState("");
+  const [trBusy, setTrBusy] = useState<"literal" | "tags" | null>(null);
+  const promptGloss = useApp((s) => s.settings.promptGloss !== false);
+  const promptNet = useApp((s) => s.settings.promptNet === true);
   const [othersOpen, setOthersOpen] = useState(false);
   const [randomOpen, setRandomOpen] = useState(false);
   const inOthers = jump === "sampler" || jump === "steps" || jump === "img2img";
@@ -282,7 +291,6 @@ export function ParamsPane({ chat, mode = "chat" }: { chat: Chat; mode?: "chat" 
             ["成人", p.sensitive, () => setFlags({ sensitive: !p.sensitive })],
             ["无码", p.uncensored, () => setFlags({ uncensored: !p.uncensored })],
             ["全身", p.fullBody, () => setFlags({ fullBody: !p.fullBody })],
-            ["补全", p.tagSuggest, () => patch({ tagSuggest: !p.tagSuggest })],
           ] as [string, boolean, () => void][]
         ).map(([label, on, fn]) => (
           <button
@@ -312,16 +320,122 @@ export function ParamsPane({ chat, mode = "chat" }: { chat: Chat; mode?: "chat" 
           >
             负向
           </button>
+          <button
+            type="button"
+            className={`rounded-[8px] px-4 py-1 ${polarity === "tr" ? "bg-card text-ink" : "text-ink"}`}
+            onClick={() => setPolarity("tr")}
+          >
+            翻译
+          </button>
+        </div>
+        <div className="relative ml-auto">
+          <button
+            type="button"
+            className="grid size-9 place-items-center rounded-[10px] border border-line bg-card"
+            aria-label="提示词设置"
+            aria-expanded={gear}
+            onClick={() => setGear((v) => !v)}
+          >
+            <Settings className="size-4" />
+          </button>
+          {gear ? (
+            <div className="absolute right-0 top-11 z-30 w-56 rounded-[16px] border border-line bg-card p-3 shadow-lg">
+              {(
+                [
+                  ["点词译文", promptGloss, false, () => useApp.getState().setSettings({ promptGloss: !promptGloss })],
+                  ["联网翻译", promptNet, false, () => useApp.getState().setSettings({ promptNet: !promptNet })],
+                  ["补全", p.tagSuggest, false, () => patch({ tagSuggest: !p.tagSuggest })],
+                ] as [string, boolean, boolean, () => void][]
+              ).map(([label, on, disabled, fn]) => (
+                <div key={label} className="flex items-center justify-between gap-3 py-1.5">
+                  <span className={`text-[14px] ${disabled ? "text-muted" : ""}`}>{label}</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={on}
+                    aria-label={label}
+                    disabled={disabled}
+                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors duration-200 ${on && !disabled ? "bg-primary" : "bg-line"} ${disabled ? "opacity-40" : ""}`}
+                    onClick={() => {
+                      if (!disabled) fn();
+                    }}
+                  >
+                    <span className={`block size-4 rounded-full bg-white shadow-sm transition-transform duration-200 ease-out ${on ? "translate-x-4" : "translate-x-0"}`} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
         <button
           type="button"
-          className="ml-auto grid size-9 place-items-center rounded-[10px] border border-line bg-card"
+          className="grid size-9 place-items-center rounded-[10px] border border-line bg-card"
           aria-label="随机设置"
           onClick={() => setRandomOpen(true)}
         >
           <Dices className="size-4" />
         </button>
       </div>
+
+      {polarity === "tr" && (
+        <div className="mt-3">
+          <div className="mb-1 text-[13px] text-muted">原文</div>
+          <TextArea value={trSrc} placeholder="写一句想翻译的话" style={{ minHeight: 120 }} onChange={(e) => setTrSrc(e.target.value)} />
+          <div className="my-3 flex gap-2">
+            <button
+              type="button"
+              disabled={!!trBusy || !trSrc.trim()}
+              className="h-8 rounded-full bg-primary px-4 text-[13px] text-on-primary disabled:opacity-40"
+              onClick={() => {
+                setTrBusy("literal");
+                void translateText(trSrc.trim(), isMostlyChinese(trSrc) ? "en" : "zh")
+                  .then((text) => setTrOut(text))
+                  .catch((err: unknown) => useApp.getState().toast(err instanceof Error ? err.message : "翻译失败"))
+                  .finally(() => setTrBusy(null));
+              }}
+            >
+              {trBusy === "literal" ? "翻译中" : "直译"}
+            </button>
+            <button
+              type="button"
+              disabled={!!trBusy || !trSrc.trim()}
+              className="h-8 rounded-full border border-line px-4 text-[13px] disabled:opacity-40"
+              onClick={() => {
+                setTrBusy("tags");
+                void grokOnce({
+                  task: "image",
+                  max_tokens: 400,
+                  messages: [
+                    {
+                      role: "system",
+                      content: "你把用户写的画面写成 NovelAI 提示词。只输出逗号分隔的英文标签，不要解释，不要引号。",
+                    },
+                    { role: "user", content: trSrc.trim() },
+                  ],
+                })
+                  .then((text) => setTrOut(text.trim()))
+                  .catch((err: unknown) => useApp.getState().toast(err instanceof Error ? err.message : "翻译失败"))
+                  .finally(() => setTrBusy(null));
+              }}
+            >
+              {trBusy === "tags" ? "翻译中" : "写成提示词"}
+            </button>
+          </div>
+          <div className="mb-1 text-[13px] text-muted">翻译结果</div>
+          <TextArea value={trOut} style={{ minHeight: 120 }} onChange={(e) => setTrOut(e.target.value)} />
+          <button
+            type="button"
+            className="mt-3 text-[14px] text-primary disabled:opacity-40"
+            disabled={!trOut.trim()}
+            onClick={() => {
+              patch({ promptMid: appendPrompt(p.promptMid, trOut.trim()) });
+              useApp.getState().toast("已放到正面提示词.中");
+            }}
+          >
+            应用到正面提示词.中
+          </button>
+        </div>
+      )}
 
       {polarity === "pos" && (!hideSplit ? (
         <>
@@ -1059,6 +1173,13 @@ export function PromptBox({
   };
   return (
     <div className="relative">
+      <RanMarks
+        text={value}
+        box={ref}
+        favId={favId}
+        onInsert={(piece, how) => onChange(how === "line" ? appendPromptLine(value, piece) : appendPrompt(value, piece))}
+        onChange={onChange}
+      />
       <TextArea
         ref={ref}
         value={shown}
@@ -1127,17 +1248,11 @@ export function PromptBox({
             setHits([]);
             return;
           }
-          setHits(suggestTags(clean, cleanCaret(nextShown, caret), 8).items);
+          setHits(suggestTags(clean, cleanCaret(nextShown, caret), 60).items);
         }}
       />
-      <RanMarks
-        text={value}
-        box={ref}
-        favId={favId}
-        onInsert={(piece, how) => onChange(how === "line" ? appendPromptLine(value, piece) : appendPrompt(value, piece))}
-      />
       {hits.length > 0 && (
-        <div className="absolute inset-x-0 top-full z-20 mt-1 max-h-40 overflow-auto rounded-[14px] border border-line bg-card py-1 shadow-lg">
+        <div className="absolute inset-x-0 top-full z-20 mt-1 max-h-64 overflow-auto rounded-[14px] border border-line bg-card py-1 shadow-lg">
           {hits.map((t) => (
             <button
               key={t.e}
