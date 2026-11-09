@@ -97,6 +97,10 @@ export function abortChat(id: string) {
   });
 }
 
+export function replyBusy(id: string) {
+  return busy.has(id);
+}
+
 export function replyPending(id: string) {
   if (!busy.has(id)) return false;
   const last = chat(id)?.messages.at(-1);

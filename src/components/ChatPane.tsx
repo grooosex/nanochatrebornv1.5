@@ -35,7 +35,7 @@ import { SceneBackdrop } from "./LookSheet";
 import { parseReplyMarkup, type ReplyFold } from "@/lib/reply-markup";
 import type { Chat, ChatMessage, GenImage, ImageGenSource, MultiMode, PromptInsertMode, UserShot } from "@/lib/types";
 import { CHAT_SHOT_MAX, messageShots } from "@/lib/user-markup";
-import { attachImage, abortChat, branchFrom, cancelImage, cancelMemory, editMessage, regenMessage, replyPending, retryMemory, sendUser } from "./chat-actions";
+import { attachImage, abortChat, branchFrom, cancelImage, cancelMemory, editMessage, regenMessage, replyBusy, replyPending, retryMemory, sendUser } from "./chat-actions";
 import { ChatModelSelect } from "./ModelSelect";
 import { ChatAvatar, ExpandSelect, Modal, TextArea, useCooldown, ZoomImg } from "./ui-kit";
 
@@ -50,15 +50,29 @@ export function ChatPane({ chat }: { chat: Chat }) {
   const scroller = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [atBottom, setAtBottom] = useState(true);
+  const scrollMem = useRef<Record<string, number>>({});
   const draft = useApp((s) => s.composerDrafts[chat.id] ?? "");
   const shots = useApp((s) => s.composerShots[chat.id] ?? noShots);
 
   useEffect(() => {
     const el = scroller.current;
+    const id = chat.id;
+    const remembered = chat.scrollTop || 0;
+    scrollMem.current[id] = remembered;
     if (!el) return;
-    el.scrollTop = chat.scrollTop || 0;
-    const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    setAtBottom(bottom);
+    const place = () => {
+      if (replyBusy(id)) el.scrollTop = el.scrollHeight;
+      else el.scrollTop = scrollMem.current[id] ?? 0;
+      const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      setAtBottom(bottom);
+    };
+    place();
+    const raf = requestAnimationFrame(place);
+    return () => {
+      cancelAnimationFrame(raf);
+      const top = scrollMem.current[id] ?? 0;
+      if (top > 0) useApp.getState().patchChat(id, { scrollTop: top });
+    };
   }, [chat.id]);
 
   useEffect(() => {
@@ -67,9 +81,12 @@ export function ChatPane({ chat }: { chat: Chat }) {
 
   const onScroll = () => {
     const el = scroller.current;
-    if (!el) return;
+    if (!el || el.clientHeight < 40) return;
     const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    const prev = scrollMem.current[chat.id] ?? chat.scrollTop ?? 0;
+    if (el.scrollTop === 0 && prev > 80) return;
     setAtBottom(bottom);
+    scrollMem.current[chat.id] = el.scrollTop;
     useApp.getState().patchChat(chat.id, { scrollTop: el.scrollTop });
   };
 
